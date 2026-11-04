@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <title>Criar conta · Ruinhaven</title>
+    <style>
+      :root {
+        --ink: #efe4c8;
+        --ink-dim: #b3a685;
+        --panel: #17140f;
+        --card: #221d16;
+        --line: #4a4237;
+        --accent: #e0a94e;
+        --accent-ink: #17140f;
+        --good: #9cc96f;
+        --bad: #e07a63;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: radial-gradient(circle at 50% 20%, #2a241b, #0b0a08 70%);
+        color: var(--ink);
+        font-family: "IBM Plex Sans Condensed", "Segoe UI", sans-serif;
+      }
+      main {
+        width: min(380px, calc(100vw - 32px));
+        padding: 28px;
+        background: var(--panel);
+        border: 2px solid #0b0a08;
+        box-shadow: inset 0 0 0 1px #5c4f3b, 0 12px 32px rgba(0, 0, 0, 0.5);
+      }
+      h1 {
+        margin: 0 0 4px;
+        font-size: 26px;
+        letter-spacing: 0.5px;
+      }
+      p.hint {
+        margin: 0 0 20px;
+        color: var(--ink-dim);
+        font-size: 14px;
+      }
+      label {
+        display: grid;
+        gap: 6px;
+        margin-bottom: 14px;
+        font-size: 14px;
+      }
+      label.check {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      input[type="email"],
+      input[type="password"],
+      input[type="text"] {
+        width: 100%;
+        padding: 10px;
+        border: 1px solid var(--line);
+        background: var(--card);
+        color: var(--ink);
+        font: inherit;
+      }
+      input:focus {
+        outline: 2px solid var(--accent);
+        outline-offset: 1px;
+      }
+      #captcha {
+        min-height: 70px;
+        margin: 6px 0 14px;
+      }
+      button {
+        width: 100%;
+        padding: 12px;
+        border: 2px solid #0b0a08;
+        background: var(--accent);
+        color: var(--accent-ink);
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.6;
+        cursor: wait;
+      }
+      #status {
+        min-height: 1.4em;
+        margin: 14px 0 0;
+        font-size: 14px;
+      }
+      #status.good {
+        color: var(--good);
+      }
+      #status.bad {
+        color: var(--bad);
+      }
+      footer {
+        margin-top: 18px;
+        color: var(--ink-dim);
+        font-size: 12px;
+      }
+    </style>
+    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
+  </head>
+  <body>
+    <main>
+      <h1>Ruinhaven</h1>
+      <p class="hint">Crie sua conta aqui e depois entre pelo jogo com o mesmo email e senha.</p>
+      <form id="signup" novalidate>
+        <label>Email <input name="email" type="email" autocomplete="email" required /></label>
+        <label>Senha <input name="password" type="password" autocomplete="new-password" minlength="8" required /></label>
+        <label>Repita a senha <input name="repeat" type="password" autocomplete="new-password" required /></label>
+        <label class="check"><input name="show" type="checkbox" /> Mostrar senha</label>
+        <div id="captcha"></div>
+        <button type="submit">Criar conta</button>
+        <p id="status" role="status" aria-live="polite"></p>
+      </form>
+      <footer>Os termos de uso e a política de privacidade aparecem no jogo, quando você cria o seu assentamento.</footer>
+    </main>
+    <script type="module">
+      const CONFIG = {
+        supabaseUrl: "https://vblulgzoiwvuwfyelrqr.supabase.co",
+        publishableKey: "sb_publishable_vmYwpS6kNatMDQtWq0bL3g_hnlDU5Jl",
+        apiUrl: "https://vblulgzoiwvuwfyelrqr.supabase.co/functions/v1/ruinhaven",
+        turnstileSiteKey: "0x4AAAAAAFzsZDwmL1Iqw70y",
+      };
+      const MIN_PASSWORD_LENGTH = 8;
+      const TICKET_FIELD = "signup_ticket";
+      const UNREACHABLE = "Não consegui falar com o servidor. Confira a internet e tente de novo.";
+      const MESSAGES = {
+        captcha_failed: "A verificação anti-robô falhou. Tente de novo.",
+        rate_limited: "Muitas tentativas agora. Espere um minuto.",
+        signup_unavailable: "Cadastro indisponível no momento. Tente mais tarde.",
+        invalid_request: "Confira o email.",
+        user_already_exists: "Já existe uma conta com esse email.",
+        email_exists: "Já existe uma conta com esse email.",
+        weak_password: "Senha fraca. Use pelo menos 8 caracteres.",
+        email_address_invalid: "Esse email não é válido.",
+        over_email_send_rate_limit: "Muitos emails enviados agora. Tente de novo em alguns minutos.",
+        over_request_rate_limit: "Muitas tentativas. Espere um pouco.",
+        signup_disabled: "Cadastro fechado no momento.",
+        email_address_not_authorized: "Esse email não pode receber a confirmação agora. Avise quem administra o jogo.",
+      };
+
+      const form = document.querySelector("#signup");
+      const status = document.querySelector("#status");
+      const submit = form.querySelector("button[type=submit]");
+      const { email, password, repeat, show } = form.elements;
+      let captchaToken = "";
+      let widget = null;
+
+      const say = (text, tone = "") => {
+        status.textContent = text;
+        status.className = tone;
+      };
+
+      const resetCaptcha = () => {
+        captchaToken = "";
+        if (widget !== null && window.turnstile) {
+          window.turnstile.reset(widget);
+        }
+      };
+
+      const renderCaptcha = () => {
+        if (!window.turnstile) {
+          window.setTimeout(renderCaptcha, 200);
+          return;
+        }
+        widget = window.turnstile.render("#captcha", {
+          sitekey: CONFIG.turnstileSiteKey,
+          language: "pt-BR",
+          theme: "dark",
+          callback: (token) => {
+            captchaToken = token;
+          },
+          "expired-callback": () => {
+            captchaToken = "";
+          },
+          "error-callback": () => {
+            captchaToken = "";
+            say("A verificação anti-robô não carregou. Recarregue a página.", "bad");
+          },
+        });
+      };
+
+      const showConfirmation = () => {
+        const params = new URLSearchParams(window.location.hash.slice(1));
+        if (params.has("error_description")) {
+          say(`O link de confirmação não funcionou: ${params.get("error_description")}`, "bad");
+        } else if (params.has("access_token")) {
+          say("Email confirmado! Volte ao Ruinhaven e entre com seu email e senha.", "good");
+          form.hidden = true;
+        }
+        if (window.location.hash) {
+          window.history.replaceState(null, "", window.location.pathname);
+        }
+      };
+
+      const readError = async (response) => {
+        const body = await response.json().catch(() => ({}));
+        const code = body?.error?.code ?? body?.error_code ?? body?.code;
+        return MESSAGES[code] ?? body?.msg ?? body?.message ?? `Erro ${response.status}.`;
+      };
+
+      const requestTicket = async (address) => {
+        const response = await fetch(`${CONFIG.apiUrl}/signup/ticket`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: address, captchaToken }),
+        });
+        return response.ok ? { ticket: (await response.json()).ticket } : { error: await readError(response) };
+      };
+
+      const createAccount = async (address, ticket) => {
+        const redirect = encodeURIComponent(window.location.origin + window.location.pathname);
+        const response = await fetch(`${CONFIG.supabaseUrl}/auth/v1/signup?redirect_to=${redirect}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", apikey: CONFIG.publishableKey },
+          body: JSON.stringify({ email: address, password: password.value, data: { [TICKET_FIELD]: ticket } }),
+        });
+        return response.ok ? { done: true } : { error: await readError(response) };
+      };
+
+      const problem = () => {
+        if (!email.value.includes("@")) {
+          return "Digite um email válido.";
+        }
+        if (password.value.length < MIN_PASSWORD_LENGTH) {
+          return `A senha precisa de pelo menos ${MIN_PASSWORD_LENGTH} caracteres.`;
+        }
+        if (repeat.value !== password.value) {
+          return "As senhas não são iguais.";
+        }
+        if (!captchaToken) {
+          return "Complete a verificação anti-robô.";
+        }
+        return null;
+      };
+
+      show.addEventListener("change", () => {
+        const type = show.checked ? "text" : "password";
+        password.type = type;
+        repeat.type = type;
+      });
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const invalid = problem();
+        if (invalid) {
+          say(invalid, "bad");
+          return;
+        }
+        submit.disabled = true;
+        say("Criando a conta...");
+        const address = email.value.trim();
+        try {
+          const granted = await requestTicket(address);
+          const created = granted.error ? granted : await createAccount(address, granted.ticket);
+          if (created.error) {
+            say(created.error, "bad");
+            return;
+          }
+          form.reset();
+          say("Conta criada! Abra o link que mandamos pro seu email e depois entre pelo jogo.", "good");
+        } catch {
+          say(UNREACHABLE, "bad");
+        } finally {
+          submit.disabled = false;
+          resetCaptcha();
+        }
+      });
+
+      showConfirmation();
+      renderCaptcha();
+    </script>
+  </body>
+</html>
