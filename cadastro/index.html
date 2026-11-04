@@ -224,7 +224,11 @@
           headers: { "Content-Type": "application/json", apikey: CONFIG.publishableKey },
           body: JSON.stringify({ email: address, password: password.value, data: { [TICKET_FIELD]: ticket } }),
         });
-        return response.ok ? { done: true } : { error: await readError(response) };
+        if (!response.ok) {
+          return { error: await readError(response) };
+        }
+        const body = await response.json().catch(() => ({}));
+        return { confirmed: Boolean(body?.access_token || body?.user?.email_confirmed_at || body?.email_confirmed_at) };
       };
 
       const problem = () => {
@@ -267,7 +271,12 @@
             return;
           }
           form.reset();
-          say("Conta criada! Abra o link que mandamos pro seu email e depois entre pelo jogo.", "good");
+          say(
+            created.confirmed
+              ? "Conta criada! Já pode entrar pelo jogo com esse email e senha."
+              : "Conta criada! Abra o link que mandamos pro seu email e depois entre pelo jogo.",
+            "good",
+          );
         } catch {
           say(UNREACHABLE, "bad");
         } finally {
